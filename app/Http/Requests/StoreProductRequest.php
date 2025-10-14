@@ -1,0 +1,21 @@
+<?php
+
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+
+class StoreProductRequest extends FormRequest
+{
+    public function authorize(): bool { return true; }
+
+    public function rules(): array
+    {
+        return [
+            'name' => 'required|string|max:255',
+            'buy_price' => 'required|numeric|min:0',
+            'sell_price' => 'required|numeric|min:0',
+            'quantity' => 'required|integer|min:0',
+            'added_at' => 'sometimes',
+        ];
+    }
+}

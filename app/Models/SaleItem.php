@@ -1,0 +1,37 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+
+class SaleItem extends Model
+{
+    use HasFactory;
+
+    protected $fillable = [
+        'sale_id',
+        'product_id',
+        'name',
+        'quantity',
+        'sell_price',
+        'buy_price',
+        'profit',
+    ];
+
+    protected $casts = [
+        'sell_price' => 'float',
+        'buy_price' => 'float',
+        'profit' => 'float',
+    ];
+
+    public function sale()
+    {
+        return $this->belongsTo(Sale::class);
+    }
+
+    public function product()
+    {
+        return $this->belongsTo(Product::class);
+    }
+}

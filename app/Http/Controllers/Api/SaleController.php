@@ -4,29 +4,80 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreSaleRequest;
+use App\Http\Services\FundsService;
 use App\Models\Product;
 use App\Models\Sale;
 use App\Models\SaleItem;
 use App\Models\SaleReturn;
+use App\Http\Services\InventoryAnalyticsService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class SaleController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
-        $sales = Sale::query()
+        $query = Sale::query()
             ->where('is_deleted', 0)
-            ->with([ 'returns'])
-            ->with(['items' => function ($query) {
-                $query->where('quantity', '>', 0);
-            }])
-            ->orderBy('created_at', 'desc')
-            ->get();
-        return response()->json($sales);
+            ->with(['returns'])
+            ->with(['items' => function ($q) {
+                $q->where('quantity', '>', 0);
+            }]);
+
+        // Search filter (customer name, comment)
+        if ($request->has('search')) {
+            $search = $request->input('search');
+            $query->where(function ($q) use ($search) {
+                $q->where('customer_name', 'like', "%{$search}%")
+                    ->orWhere('comment', 'like', "%{$search}%");
+            });
+        }
+
+        // Customer name filter
+        if ($request->has('customer_name')) {
+            $query->where('customer_name', 'like', "%{$request->input('customer_name')}%");
+        }
+
+        // Total amount range filters
+        if ($request->has('min_total')) {
+            $query->where('total', '>=', $request->input('min_total'));
+        }
+        if ($request->has('max_total')) {
+            $query->where('total', '<=', $request->input('max_total'));
+        }
+
+        // Paid status filter
+        if ($request->has('paid')) {
+            $query->where('paid', $request->input('paid'));
+        }
+
+        // Status filter
+        if ($request->has('status')) {
+            $query->where('status', $request->input('status'));
+        }
+
+        // Date range filters
+        if ($request->has('date_from')) {
+            $query->whereDate('created_at', '>=', $request->input('date_from'));
+        }
+        if ($request->has('date_to')) {
+            $query->whereDate('created_at', '<=', $request->input('date_to'));
+        }
+
+        // Filter by sales with returns
+        if ($request->has('has_returns')) {
+            $query->whereHas('returns');
+        }
+
+        // Sorting
+        $sortBy = $request->input('sort_by', 'created_at');
+        $sortOrder = $request->input('sort_order', 'desc');
+        $query->orderBy($sortBy, $sortOrder);
+
+        return response()->json($query->get());
     }
 
-    public function store(StoreSaleRequest $request)
+    public function store(StoreSaleRequest $request): \Illuminate\Http\JsonResponse
     {
         $items = $request->input('items');
 
@@ -60,9 +111,16 @@ class SaleController extends Controller
                 $product->quantity -= $quantity;
                 $product->save();
 
-                $profit = ($sellPrice - $product->buy_price) * $quantity;
                 $lineTotal = $sellPrice * $quantity;
                 $total += $lineTotal;
+
+                // Себестоимость и прибыль
+                $COGS = $product->buy_price * $quantity;
+                $profit = $lineTotal - $COGS;
+
+                // Обновляем балансы
+                FundsService::updateBalance('cogs', $COGS, 'sales', $sale->id, 'Начисление себестоимости');
+                FundsService::updateBalance('profit', $profit, 'sales', $sale->id, 'Начисление прибыли');
 
                 SaleItem::query()
                     ->create([
@@ -80,7 +138,6 @@ class SaleController extends Controller
             $sale->save();
 
             DB::commit();
-
             return response()->json($sale->load('items'), 201);
 
         } catch (\Exception $e) {
@@ -178,14 +235,18 @@ class SaleController extends Controller
                     throw new \Exception("Товар с ID {$productId} не найден");
                 }
 
+
                 $product->quantity += $returnQuantity;
                 $product->save();
 
+                // При возврате товаров нужно уменьшать COGS и прибыль
+                $refundCOGS = $saleItem->buy_price * $returnQuantity;
+                $refundProfit = ($saleItem->sell_price - $saleItem->buy_price) * $returnQuantity;
                 // Создать запись о возврате
                 $refundAmount = $saleItem->sell_price * $returnQuantity;
                 $totalRefund += $refundAmount;
 
-                SaleReturn::create([
+                $saleReturn = SaleReturn::create([
                     'sale_id' => $sale->id,
                     'product_id' => $productId,
                     'product_name' => $saleItem->name,
@@ -195,6 +256,11 @@ class SaleController extends Controller
                     'refund_amount' => $refundAmount,
                     'comment' => $comment,
                 ]);
+
+                // Вычитаем из балансов
+                FundsService::updateBalance('cogs', -$refundCOGS, 'sale_returns', $saleReturn->id, 'Вычитание из себестоимости');
+                FundsService::updateBalance('profit', -$refundProfit, 'sale_returns', $saleReturn->id, 'Вычитание из прибыли');
+
             }
 
             // Обновить общую сумму заказа
@@ -215,6 +281,16 @@ class SaleController extends Controller
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json(['message' => $e->getMessage()], 422);
+        }
+    }
+
+    public function analytics(Request $request): \Illuminate\Http\JsonResponse
+    {
+        try {
+            $result = InventoryAnalyticsService::getSummary($request->input('date_from'), $request->input('date_to'));
+            return response()->json($result);
+        } catch (\Exception $e) {
+            return response()->json($e->getMessage(), 422);
         }
     }
 }

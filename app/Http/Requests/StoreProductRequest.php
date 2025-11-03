@@ -12,10 +12,7 @@ class StoreProductRequest extends FormRequest
     {
         return [
             'name' => 'required|string|max:255',
-            'buy_price' => 'required|numeric|min:0',
             'sell_price' => 'required|numeric|min:0',
-            'quantity' => 'required|integer|min:0',
-            'added_at' => 'sometimes',
         ];
     }
 }

@@ -3,17 +3,15 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use App\Models\User;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\Response;
 
 class AuthController extends Controller
 {
-    // Регистрация (опционально)
-    public function register(Request $request)
+    public function register(Request $request): JsonResponse
     {
         $data = $request->validate([
             'name' => 'nullable|string|max:255',
@@ -29,12 +27,14 @@ class AuthController extends Controller
         ]);
 
         $token = $user->createToken('auth_token')->plainTextToken;
-
-        return response()->json(['user' => $user, 'token' => $token]);
+        return $this->sendJsonResponse(
+            Response::HTTP_OK,
+            [],
+            ['user' => $user, 'token' => $token]
+        );
     }
 
-    // Вход
-    public function login(Request $request)
+    public function login(Request $request): JsonResponse
     {
         $data = $request->validate([
             'email' => 'required|email',
@@ -44,25 +44,32 @@ class AuthController extends Controller
         $user = User::query()->where('email', $data['email'])->first();
 
         if (!$user || !Hash::check($data['password'], $user->password)) {
-            throw ValidationException::withMessages([
-                'email' => ['Неверные учетные данные.'],
-            ]);
+            return $this->sendJsonResponse(
+                Response::HTTP_BAD_REQUEST,
+                ['message' => 'Неверные учетные данные.']
+            );
         }
 
         $token = $user->createToken('auth_token')->plainTextToken;
 
-        return response()->json(['user' => $user, 'token' => $token]);
+        return $this->sendJsonResponse(
+            Response::HTTP_OK,
+            [],
+            ['user' => $user, 'token' => $token]
+        );
     }
 
-    // Выход
-    public function logout(Request $request)
+    public function logout(Request $request): JsonResponse
     {
         $request->user()->currentAccessToken()->delete();
-
-        return response()->json(['message' => 'Вы вышли из системы']);
+        return $this->sendJsonResponse(
+            Response::HTTP_OK,
+            [],
+            ['message' => 'Вы вышли из системы']
+        );
     }
 
-    public function me(Request $request)
+    public function me(Request $request): JsonResponse
     {
         $user = $request->user();
 
@@ -70,17 +77,17 @@ class AuthController extends Controller
             if ($user->is_deleted === 1) {
                 return response()->json(
                     ['message' => 'Ваш аккаунт удален!'],
-                    JsonResponse::HTTP_UNAUTHORIZED
+                    Response::HTTP_UNAUTHORIZED
                 );
             }
             return response()->json(
                 $user,
-                JsonResponse::HTTP_OK
+                Response::HTTP_OK
             );
         }
         return response()->json(
             ['message' => 'Пользователь не найден!'],
-            JsonResponse::HTTP_UNAUTHORIZED
+            Response::HTTP_UNAUTHORIZED
         );
     }
 }

@@ -5,21 +5,21 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreProductRequest;
 use App\Models\Product;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
 
 class ProductController extends Controller
 {
-    public function index(Request $request)
+    public function index(Request $request): JsonResponse
     {
         $query = Product::query()->where('is_deleted', 0);
 
-        // Search filter (name)
         if ($request->has('search')) {
             $search = $request->input('search');
             $query->where('name', 'like', "%{$search}%");
         }
 
-        // Price range filters
         if ($request->has('min_buy_price')) {
             $query->where('buy_price', '>=', $request->input('min_buy_price'));
         }
@@ -33,7 +33,6 @@ class ProductController extends Controller
             $query->where('sell_price', '<=', $request->input('max_sell_price'));
         }
 
-        // Quantity filters
         if ($request->has('min_quantity')) {
             $query->where('quantity', '>=', $request->input('min_quantity'));
         }
@@ -41,13 +40,11 @@ class ProductController extends Controller
             $query->where('quantity', '<=', $request->input('max_quantity'));
         }
 
-        // Low stock filter
         if ($request->has('low_stock') && $request->input('low_stock')) {
             $threshold = $request->input('low_stock_threshold', 10);
             $query->where('quantity', '<=', $threshold);
         }
 
-        // Date range filters
         if ($request->has('date_from')) {
             $query->whereDate('created_at', '>=', $request->input('date_from'));
         }
@@ -55,15 +52,18 @@ class ProductController extends Controller
             $query->whereDate('created_at', '<=', $request->input('date_to'));
         }
 
-        // Sorting
         $sortBy = $request->input('sort_by', 'id');
         $sortOrder = $request->input('sort_order', 'asc');
         $query->orderBy($sortBy, $sortOrder);
 
-        return response()->json($query->get());
+        return $this->sendJsonResponse(
+            Response::HTTP_OK,
+            [],
+            $query->get()
+        );
     }
 
-    public function store(StoreProductRequest $request)
+    public function store(StoreProductRequest $request): JsonResponse
     {
         $data = $request->validated();
 
@@ -74,15 +74,23 @@ class ProductController extends Controller
             'quantity' => $data['quantity'] ?? 0,
         ]);
 
-        return response()->json($product, 201);
+        return $this->sendJsonResponse(
+            Response::HTTP_CREATED,
+            [],
+            $product
+        );
     }
 
-    public function show(Product $product)
+    public function show(Product $product): JsonResponse
     {
-        return response()->json($product);
+        return $this->sendJsonResponse(
+            Response::HTTP_OK,
+            [],
+            $product
+        );
     }
 
-    public function update(StoreProductRequest $request, Product $product)
+    public function update(StoreProductRequest $request, Product $product): JsonResponse
     {
         $data = $request->validated();
         $product->update([
@@ -92,13 +100,17 @@ class ProductController extends Controller
             'quantity' => $data['quantity'] ?? $product->quantity,
         ]);
 
-        return response()->json($product);
+        return $this->sendJsonResponse(
+            Response::HTTP_OK,
+            [],
+            $product
+        );
     }
 
-    public function destroy(Product $product)
+    public function destroy(Product $product): JsonResponse
     {
         $product->is_deleted = 1;
         $product->save();
-        return response()->json(null, 204);
+        return $this->sendJsonResponse(Response::HTTP_NO_CONTENT);
     }
 }

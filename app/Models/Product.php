@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Product extends Model
 {
@@ -11,9 +12,7 @@ class Product extends Model
 
     protected $fillable = [
         'name',
-        'buy_price',
         'sell_price',
-        'quantity',
         'is_deleted',
     ];
 
@@ -25,7 +24,7 @@ class Product extends Model
 
     protected $hidden = ['is_deleted'];
 
-    public function saleItems()
+    public function saleItems(): HasMany
     {
         return $this->hasMany(SaleItem::class);
     }

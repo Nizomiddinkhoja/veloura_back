@@ -5,11 +5,13 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreDealerRequest;
 use App\Models\Dealer;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
 
 class DealerController extends Controller
 {
-    public function index(Request $request)
+    public function index(Request $request): JsonResponse
     {
         $query = Dealer::query();
 
@@ -37,10 +39,14 @@ class DealerController extends Controller
         $sortOrder = $request->input('sort_order', 'desc');
         $query->orderBy($sortBy, $sortOrder);
 
-        return response()->json($query->get());
+        return $this->sendJsonResponse(
+            Response::HTTP_OK,
+            [],
+            $query->get()
+        );
     }
 
-    public function store(StoreDealerRequest $request)
+    public function store(StoreDealerRequest $request): JsonResponse
     {
         $data = $request->validated();
 
@@ -49,29 +55,41 @@ class DealerController extends Controller
             'status' => $data['status'] ?? true,
         ]);
 
-        return response()->json($dealer, 201);
+        return $this->sendJsonResponse(
+            Response::HTTP_CREATED,
+            [],
+            $dealer
+        );
     }
 
-    public function show(Dealer $dealer)
+    public function show(Dealer $dealer): JsonResponse
     {
-        return response()->json($dealer);
+        return $this->sendJsonResponse(
+            Response::HTTP_OK,
+            [],
+            $dealer
+        );
     }
 
-    public function update(StoreDealerRequest $request, Dealer $dealer)
+    public function update(StoreDealerRequest $request, Dealer $dealer): JsonResponse
     {
         $data = $request->validated();
-        
+
         $dealer->update([
             'name' => $data['name'] ?? $dealer->name,
             'status' => $data['status'] ?? $dealer->status,
         ]);
 
-        return response()->json($dealer);
+        return $this->sendJsonResponse(
+            Response::HTTP_OK,
+            [],
+            $dealer
+        );
     }
 
-    public function destroy(Dealer $dealer)
+    public function destroy(Dealer $dealer): JsonResponse
     {
         $dealer->delete();
-        return response()->json(null, 204);
+        return $this->sendJsonResponse(Response::HTTP_NO_CONTENT);
     }
 }

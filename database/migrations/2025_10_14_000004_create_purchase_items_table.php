@@ -13,6 +13,7 @@ return new class extends Migration
             $table->foreignId('purchase_id')->constrained('purchases')->onDelete('cascade');
             $table->foreignId('product_id')->nullable()->constrained('products')->onDelete('set null');
             $table->integer('quantity');
+            $table->integer('remaining_quantity')->nullable();
             $table->decimal('buy_price', 10, 2);
             $table->boolean('is_return')->default(false);
             $table->timestamps();

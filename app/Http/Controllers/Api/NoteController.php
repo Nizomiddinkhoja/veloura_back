@@ -5,21 +5,21 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreNoteRequest;
 use App\Models\Note;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
 
 class NoteController extends Controller
 {
-    public function index(Request $request)
+    public function index(Request $request): JsonResponse
     {
         $query = Note::query()->where('is_deleted', 0);
 
-        // Search filter (text)
         if ($request->has('search')) {
             $search = $request->input('search');
             $query->where('text', 'like', "%{$search}%");
         }
 
-        // Date range filters
         if ($request->has('date_from')) {
             $query->whereDate('created_at', '>=', $request->input('date_from'));
         }
@@ -27,15 +27,18 @@ class NoteController extends Controller
             $query->whereDate('created_at', '<=', $request->input('date_to'));
         }
 
-        // Sorting
         $sortBy = $request->input('sort_by', 'id');
         $sortOrder = $request->input('sort_order', 'asc');
         $query->orderBy($sortBy, $sortOrder);
 
-        return response()->json($query->get());
+        return $this->sendJsonResponse(
+            Response::HTTP_OK,
+            [],
+            $query->get()
+        );
     }
 
-    public function store(StoreNoteRequest $request)
+    public function store(StoreNoteRequest $request): JsonResponse
     {
         $data = $request->validated();
 
@@ -43,28 +46,40 @@ class NoteController extends Controller
             'text' => $data['text'],
         ]);
 
-        return response()->json($data['text'], 200);
+        return $this->sendJsonResponse(
+            Response::HTTP_CREATED,
+            [],
+            $note
+        );
     }
 
-    public function show(Note $note)
+    public function show(Note $note): JsonResponse
     {
-        return response()->json($note);
+        return $this->sendJsonResponse(
+            Response::HTTP_OK,
+            [],
+            $note
+        );
     }
 
-    public function update(StoreNoteRequest $request, Note $note)
+    public function update(StoreNoteRequest $request, Note $note): JsonResponse
     {
         $data = $request->validated();
         $note->update([
             'text' => $data['text'] ?? $note->text
         ]);
 
-        return response()->json($note);
+        return $this->sendJsonResponse(
+            Response::HTTP_OK,
+            [],
+            $note
+        );
     }
 
-    public function destroy(Note $note)
+    public function destroy(Note $note): JsonResponse
     {
         $note->is_deleted = 1;
         $note->save();
-        return response()->json(null, 204);
+        return $this->sendJsonResponse(Response::HTTP_CREATED);
     }
 }

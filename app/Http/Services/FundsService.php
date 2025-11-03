@@ -2,7 +2,9 @@
 
 namespace App\Http\Services;
 
+use App\Models\Fund;
 use App\Models\FundsHistory;
+use App\Models\StockMovement;
 use Illuminate\Support\Facades\DB;
 use Exception;
 
@@ -15,7 +17,7 @@ class FundsService
     }
 
     /** Изменить баланс фонда на указанную сумму (может быть отрицательной) */
-    public static function updateBalance(string $fundType, float $amount, ?string $source = null, ?int $referenceId = null, ?string $description = null): void
+    public static function updateBalance(string $fundType, float $amount, ?string $reference_type = null, ?int $referenceId = null, ?string $description = null): void
     {
         DB::table('funds')->where('fund_type', $fundType)->increment('balance', $amount);
 
@@ -23,8 +25,8 @@ class FundsService
         self::logHistory(
             fundType: $fundType,
             amount: abs($amount),
-            direction: $amount >= 0 ? 'in' : 'out',
-            source: $source,
+            direction: $amount >= 0 ? StockMovement::TYPE_IN: StockMovement::TYPE_OUT,
+            reference_type: $reference_type,
             referenceId: $referenceId,
             description: $description
         );
@@ -35,11 +37,11 @@ class FundsService
      * 1. investment → 2. cogs → 3. profit
      * Возвращает массив сколько с какого фонда было списано
      */
-    public static function allocateFunds(float $amount, ?string $source = 'purchase', ?int $referenceId = null): array
+    public static function allocateFunds(float $amount, ?string $reference_type = 'purchase', ?int $referenceId = null): array
     {
-        $investment = self::getBalance('investment');
-        $cogs = self::getBalance('cogs');
-        $profit = self::getBalance('profit');
+        $investment = self::getBalance(Fund::TYPE_INVESTMENT);
+        $cogs = self::getBalance(Fund::TYPE_COGS);
+        $profit = self::getBalance(Fund::TYPE_PROFIT);
 
         $remaining = $amount;
 
@@ -57,15 +59,15 @@ class FundsService
         }
 
         // Обновляем балансы
-        DB::transaction(function () use ($fromInvestment, $fromCogs, $fromProfit, $source, $referenceId) {
+        DB::transaction(function () use ($fromInvestment, $fromCogs, $fromProfit, $reference_type, $referenceId) {
             if ($fromInvestment > 0) {
-                self::updateBalance('investment', -$fromInvestment, $source, $referenceId, 'Закупка из investment');
+                self::updateBalance(Fund::TYPE_INVESTMENT, -$fromInvestment, $reference_type, $referenceId, 'Закупка из investment');
             }
             if ($fromCogs > 0) {
-                self::updateBalance('cogs', -$fromCogs, $source, $referenceId, 'Закупка из cogs');
+                self::updateBalance(Fund::TYPE_COGS, -$fromCogs, $reference_type, $referenceId, 'Закупка из cogs');
             }
             if ($fromProfit > 0) {
-                self::updateBalance('profit', -$fromProfit, $source, $referenceId, 'Закупка из profit');
+                self::updateBalance(Fund::TYPE_PROFIT, -$fromProfit, $reference_type, $referenceId, 'Закупка из profit');
             }
         });
 
@@ -105,13 +107,13 @@ class FundsService
         });
     }
 
-    protected static function logHistory(string $fundType, float $amount, string $direction, ?string $source = null, ?int $referenceId = null, ?string $description = null): void
+    protected static function logHistory(string $fundType, float $amount, string $direction, ?string $reference_type = null, ?int $referenceId = null, ?string $description = null): void
     {
         FundsHistory::query()->insert([
             'fund_type' => $fundType,
             'amount' => $amount,
             'direction' => $direction,
-            'source' => $source,
+            'reference_type' => $reference_type,
             'reference_id' => $referenceId,
             'description' => $description,
             'created_at' => now(),

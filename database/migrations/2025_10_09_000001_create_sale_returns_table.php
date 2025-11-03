@@ -11,7 +11,6 @@ return new class extends Migration {
             $table->id();
             $table->foreignId('sale_id')->constrained('sales')->cascadeOnDelete();
             $table->foreignId('product_id')->constrained('products')->cascadeOnDelete();
-            $table->string('product_name');
             $table->string('comment')->nullable();
             $table->integer('quantity');
             $table->decimal('sell_price', 12, 2);

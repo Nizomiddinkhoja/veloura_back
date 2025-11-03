@@ -5,24 +5,27 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreSaleRequest;
 use App\Http\Services\FundsService;
+use App\Http\Services\InventoryAnalyticsService;
+use App\Models\Fund;
 use App\Models\Product;
+use App\Models\PurchaseItem;
 use App\Models\Sale;
 use App\Models\SaleItem;
 use App\Models\SaleReturn;
-use App\Http\Services\InventoryAnalyticsService;
+use App\Models\StockMovement;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Symfony\Component\HttpFoundation\Response;
 
 class SaleController extends Controller
 {
-    public function index(Request $request)
+    public function index(Request $request): JsonResponse
     {
         $query = Sale::query()
             ->where('is_deleted', 0)
             ->with(['returns'])
-            ->with(['items' => function ($q) {
-                $q->where('quantity', '>', 0);
-            }]);
+            ->with(['items.product']);
 
         // Search filter (customer name, comment)
         if ($request->has('search')) {
@@ -74,101 +77,155 @@ class SaleController extends Controller
         $sortOrder = $request->input('sort_order', 'desc');
         $query->orderBy($sortBy, $sortOrder);
 
-        return response()->json($query->get());
+        return $this->sendJsonResponse(
+            Response::HTTP_OK,
+            [],
+            $query->get()
+        );
     }
 
-    public function store(StoreSaleRequest $request): \Illuminate\Http\JsonResponse
+    public function store(StoreSaleRequest $request): JsonResponse
     {
         $items = $request->input('items');
 
         DB::beginTransaction();
         try {
             $total = 0;
-            $sale = Sale::query()
-                ->create([
-                    'customer_name' => $request->input('customer_name'),
-                    'comment' => $request->input('comment'),
-                    'paid' => $request->input('paid'),
-                    'total' => 0
-                ]);
+
+            $sale = Sale::query()->create([
+                'customer_name' => $request->input('customer_name'),
+                'comment' => $request->input('comment'),
+                'paid' => $request->input('paid'),
+                'total' => 0
+            ]);
 
             foreach ($items as $it) {
-                $product = Product::lockForUpdate()->find($it['product_id']);
-                if (!$product) throw new \Exception('Product not found: ' . $it['product_id']);
+                $product = Product::query()->lockForUpdate()->find((int)$it['product_id']);
+                if (!$product) {
+                    return $this->sendJsonResponse(
+                        Response::HTTP_NOT_FOUND,
+                        ['message' => 'Продукт ' . $it['product_id'] . ' не найден ']
+                    );
+                }
 
                 $quantity = (int)$it['quantity'];
                 $sellPrice = (float)$it['sell_price'];
 
-                if ($sellPrice < $product->buy_price) {
-                    throw new \Exception("Цена продажи для {$product->name} меньше цены покупки");
+                // ✅ Проверяем наличие по FIFO
+                $available = PurchaseItem::query()
+                    ->where('product_id', $product->id)
+                    ->sum('remaining_quantity');
+
+                if ($quantity > $available) {
+                    return $this->sendJsonResponse(
+                        Response::HTTP_UNPROCESSABLE_ENTITY,
+                        ['message' => 'Продукт ' . $product['name'] . ' нет в наличии!']
+                    );
                 }
 
-                if ($quantity > $product->quantity) {
-                    throw new \Exception("Недостаточно на складе: {$product->name}");
-                }
+                // 💸 Списываем через FIFO
+                $batches = PurchaseItem::query()
+                    ->where('product_id', $product->id)
+                    ->where('remaining_quantity', '>', 0)
+                    ->orderBy('id')
+                    ->lockForUpdate()
+                    ->get();
 
-                // Уменьшаем остаток
-                $product->quantity -= $quantity;
-                $product->save();
+                $remaining = $quantity;
+                $totalCOGS = 0;
+
+                foreach ($batches as $batch) {
+                    if ($remaining <= 0) break;
+
+                    $take = min($batch->remaining_quantity, $remaining);
+                    $batch->decrement('remaining_quantity', $take);
+
+                    $totalCOGS += $batch->buy_price * $take;
+                    $remaining -= $take;
+
+                    // 📦 Добавляем запись движения товара
+                    StockMovement::query()->create([
+                        'product_id' => $product->id,
+                        'purchase_item_id' => $batch->id,
+                        'type' => StockMovement::TYPE_OUT,
+                        'quantity' => $take,
+                        'reference_type' => StockMovement::REFERENCE_TYPE_SALE,
+                        'reference_id' => $sale->id,
+                    ]);
+                }
 
                 $lineTotal = $sellPrice * $quantity;
+                $profit = $lineTotal - $totalCOGS;
                 $total += $lineTotal;
 
-                // Себестоимость и прибыль
-                $COGS = $product->buy_price * $quantity;
-                $profit = $lineTotal - $COGS;
+                // 💰 Обновляем фонды
+                FundsService::updateBalance(Fund::TYPE_COGS, $totalCOGS, StockMovement::REFERENCE_TYPE_SALE, $sale->id, 'Начисление себестоимости');
+                FundsService::updateBalance(Fund::TYPE_PROFIT, $profit, StockMovement::REFERENCE_TYPE_SALE, $sale->id, 'Начисление прибыли');
 
-                // Обновляем балансы
-                FundsService::updateBalance('cogs', $COGS, 'sales', $sale->id, 'Начисление себестоимости');
-                FundsService::updateBalance('profit', $profit, 'sales', $sale->id, 'Начисление прибыли');
+                // 💾 Создаём элемент продажи
+                SaleItem::query()->create([
+                    'sale_id' => $sale->id,
+                    'product_id' => $product->id,
+                    'quantity' => $quantity,
+                    'sell_price' => $sellPrice,
+                    'buy_price' => $totalCOGS / $quantity, // средняя цена по партиям
+                ]);
 
-                SaleItem::query()
-                    ->create([
-                        'sale_id' => $sale->id,
-                        'product_id' => $product->id,
-                        'name' => $product->name,
-                        'quantity' => $quantity,
-                        'sell_price' => $sellPrice,
-                        'buy_price' => $product->buy_price,
-                        'profit' => $profit,
-                    ]);
+                // Обновим общий остаток товара (опционально)
+                $product->quantity = PurchaseItem::query()
+                    ->where('product_id', $product->id)
+                    ->sum('remaining_quantity');
+                $product->save();
             }
 
             $sale->total = $total;
             $sale->save();
 
             DB::commit();
-            return response()->json($sale->load('items'), 201);
+
+            return $this->sendJsonResponse(
+                Response::HTTP_CREATED,
+                [],
+                $sale->load('items')
+            );
 
         } catch (\Exception $e) {
             DB::rollBack();
-            return response()->json(['message' => $e->getMessage()], 422);
+            return $this->sendJsonResponse(
+                Response::HTTP_UNPROCESSABLE_ENTITY,
+                ['message' => $e->getMessage()]
+            );
         }
     }
 
-    public function show(Sale $sale)
+    public function show(Sale $sale): JsonResponse
     {
-        return response()->json($sale->load('items'));
+        $data = $sale->load('items');
+        return $this->sendJsonResponse(
+            Response::HTTP_OK,
+            [],
+            $data
+        );
     }
 
-    public function destroy(Sale $sale)
+    public function destroy(Sale $sale): JsonResponse
     {
         $sale->is_deleted = 1;
         $sale->save();
-        return response()->json('ok', '204');
+        return $this->sendJsonResponse(Response::HTTP_NO_CONTENT);
     }
 
-    public function paid($id)
+    public function paid($id): JsonResponse
     {
         $sale = Sale::query()
             ->where('is_deleted', 0)
             ->find($id);
         $sale->paid = 1;
         $sale->save();
-        return response()->json('ok', '204');
+        return $this->sendJsonResponse(Response::HTTP_NO_CONTENT);
     }
 
-    public function updateComment(Request $request, $id)
+    public function updateComment(Request $request, $id): JsonResponse
     {
         $request->validate([
             'comment' => 'nullable|string',
@@ -181,75 +238,85 @@ class SaleController extends Controller
         $sale->comment = $request->input('comment');
         $sale->save();
 
-        return response()->json($sale->load(['items', 'returns']));
+        return $this->sendJsonResponse(
+            Response::HTTP_OK,
+            [],
+            $sale->load(['items', 'returns'])
+        );
     }
 
-    public function returnItems(Request $request, $id)
+    public function returnItems(Request $request, $id): JsonResponse
     {
         $request->validate([
             'items' => 'required|array',
             'items.*.product_id' => 'required|exists:products,id',
             'items.*.quantity' => 'required|integer|min:1',
-            'items.*.comment' => 'nullable',
+            'items.*.comment' => 'nullable|string',
         ]);
 
-        $sale = Sale::query()
-            ->where('is_deleted', 0)
-            ->findOrFail($id);
+        $sale = Sale::query()->where('is_deleted', 0)->findOrFail($id);
 
         DB::beginTransaction();
         try {
             $returnItems = $request->input('items');
             $totalRefund = 0;
 
-            foreach ($returnItems as $returnItem) {
-                $productId = $returnItem['product_id'];
-                $comment = $returnItem['comment'];
-                $returnQuantity = (int)$returnItem['quantity'];
+            foreach ($returnItems as $it) {
+                $productId = $it['product_id'];
+                $returnQuantity = (int)$it['quantity'];
+                $comment = $it['comment'] ?? null;
 
-                // Найти товар в заказе
                 $saleItem = SaleItem::query()
                     ->where('sale_id', $sale->id)
                     ->where('product_id', $productId)
-                    ->first();
+                    ->with('product')
+                    ->firstOrFail();
 
-                if (!$saleItem) {
-                    throw new \Exception("Товар с ID {$productId} не найден в заказе");
-                }
-
-                // Проверить, сколько уже возвращено
-                $alreadyReturned = SaleReturn::query()
-                    ->where('sale_id', $sale->id)
+                // Проверяем лимит возврата
+                $alreadyReturned = SaleReturn::query()->where('sale_id', $sale->id)
                     ->where('product_id', $productId)
                     ->sum('quantity');
 
                 $availableToReturn = $saleItem->quantity - $alreadyReturned;
-
                 if ($returnQuantity > $availableToReturn) {
-                    throw new \Exception("Нельзя вернуть {$returnQuantity} шт. товара '{$saleItem->name}'. Доступно для возврата: {$availableToReturn} шт.");
+                    return $this->sendJsonResponse(
+                        Response::HTTP_UNPROCESSABLE_ENTITY,
+                        ['message' => "Нельзя вернуть {$returnQuantity} шт. ({$saleItem->product->name}), доступно {$availableToReturn}"]
+                    );
                 }
 
-                // Вернуть товар на склад
-                $product = Product::lockForUpdate()->find($productId);
-                if (!$product) {
-                    throw new \Exception("Товар с ID {$productId} не найден");
-                }
-
-
-                $product->quantity += $returnQuantity;
-                $product->save();
-
-                // При возврате товаров нужно уменьшать COGS и прибыль
+                // 💸 Считаем суммы
+                $refundAmount = $saleItem->sell_price * $returnQuantity;
                 $refundCOGS = $saleItem->buy_price * $returnQuantity;
                 $refundProfit = ($saleItem->sell_price - $saleItem->buy_price) * $returnQuantity;
-                // Создать запись о возврате
-                $refundAmount = $saleItem->sell_price * $returnQuantity;
                 $totalRefund += $refundAmount;
 
-                $saleReturn = SaleReturn::create([
+                // 📦 Добавляем возврат в FIFO-запасы (как новый приход)
+                StockMovement::query()->create([
+                    'product_id' => $productId,
+                    'purchase_item_id' => null,
+                    'type' => StockMovement::TYPE_IN,
+                    'quantity' => $returnQuantity,
+                    'reference_type' => StockMovement::REFERENCE_TYPE_SALE_RETURNS,
+                    'reference_id' => $sale->id,
+                ]);
+
+                // Добавляем новую партию на склад с той же себестоимостью
+                PurchaseItem::query()->create([
+                    'product_id' => $productId,
+                    'buy_price' => $saleItem->buy_price,
+                    'quantity' => $returnQuantity,
+                    'remaining_quantity' => $returnQuantity,
+                ]);
+
+                // 💰 Обновляем фонды
+                FundsService::updateBalance(Fund::TYPE_COGS, -$refundCOGS, StockMovement::REFERENCE_TYPE_SALE_RETURNS, $sale->id, 'Возврат себестоимости');
+                FundsService::updateBalance(Fund::TYPE_PROFIT, -$refundProfit, StockMovement::REFERENCE_TYPE_SALE_RETURNS, $sale->id, 'Возврат прибыли');
+
+                // Создаём запись возврата
+                SaleReturn::query()->create([
                     'sale_id' => $sale->id,
                     'product_id' => $productId,
-                    'product_name' => $saleItem->name,
                     'quantity' => $returnQuantity,
                     'sell_price' => $saleItem->sell_price,
                     'buy_price' => $saleItem->buy_price,
@@ -257,40 +324,50 @@ class SaleController extends Controller
                     'comment' => $comment,
                 ]);
 
-                // Вычитаем из балансов
-                FundsService::updateBalance('cogs', -$refundCOGS, 'sale_returns', $saleReturn->id, 'Вычитание из себестоимости');
-                FundsService::updateBalance('profit', -$refundProfit, 'sale_returns', $saleReturn->id, 'Вычитание из прибыли');
-
+                // Обновляем остатки товара
+                $product = Product::query()->lockForUpdate()->find($productId);
+                $product->quantity = PurchaseItem::query()
+                    ->where('product_id', $productId)
+                    ->sum('remaining_quantity');
+                $product->save();
             }
 
-            // Обновить общую сумму заказа
             $sale->total -= $totalRefund;
             $sale->save();
 
-            $saleItem->quantity = $saleItem->quantity - $returnQuantity;
-            $saleItem->save();
-
             DB::commit();
 
-            return response()->json([
-                'message' => 'Возврат успешно оформлен',
-                'sale' => $sale->load(['items', 'returns']),
-                'total_refund' => $totalRefund,
-            ]);
-
+            return $this->sendJsonResponse(
+                Response::HTTP_OK,
+                [],
+                [
+                    'sale' => $sale->load(['items', 'returns']),
+                    'total_refund' => $totalRefund,
+                ]
+            );
         } catch (\Exception $e) {
             DB::rollBack();
-            return response()->json(['message' => $e->getMessage()], 422);
+            return $this->sendJsonResponse(
+                Response::HTTP_UNPROCESSABLE_ENTITY,
+                ['message' => $e->getMessage()]
+            );
         }
     }
 
-    public function analytics(Request $request): \Illuminate\Http\JsonResponse
+    public function analytics(Request $request): JsonResponse
     {
         try {
             $result = InventoryAnalyticsService::getSummary($request->input('date_from'), $request->input('date_to'));
-            return response()->json($result);
+            return $this->sendJsonResponse(
+                Response::HTTP_OK,
+                [],
+                $result
+            );
         } catch (\Exception $e) {
-            return response()->json($e->getMessage(), 422);
+            return $this->sendJsonResponse(
+                Response::HTTP_UNPROCESSABLE_ENTITY,
+                ['message' => $e->getMessage()]
+            );
         }
     }
 }

@@ -9,21 +9,24 @@ use App\Models\Purchase;
 use App\Models\PurchaseItem;
 use App\Models\Product;
 use App\Models\Dealer;
+use App\Models\StockMovement;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Symfony\Component\HttpFoundation\Response;
 
 class PurchaseController extends Controller
 {
-    public function index(Request $request)
+    public function index(Request $request): JsonResponse
     {
         $query = Purchase::query()->with(['dealer', 'items.product']);
 
         // Search filter (dealer name, notes)
         if ($request->has('search')) {
             $search = $request->input('search');
-            $query->where(function($q) use ($search) {
-                $q->whereHas('dealer', function($dealerQuery) use ($search) {
+            $query->where(function ($q) use ($search) {
+                $q->whereHas('dealer', function ($dealerQuery) use ($search) {
                     $dealerQuery->where('name', 'like', "%{$search}%");
                 })->orWhere('notes', 'like', "%{$search}%");
             });
@@ -52,7 +55,7 @@ class PurchaseController extends Controller
 
         // Filter by return status
         if ($request->has('has_returns')) {
-            $query->whereHas('items', function($q) {
+            $query->whereHas('items', function ($q) {
                 $q->where('is_return', true);
             });
         }
@@ -75,13 +78,13 @@ class PurchaseController extends Controller
                         'product_id' => $item->product_id,
                         'product_name' => $item->product ? $item->product->name : null,
                         'quantity' => $item->quantity,
-                        'buy_price' => (float) $item->buy_price,
-                        'sell_price' => $item->product ? (float) $item->product->sell_price : (float) $item->buy_price,
-                        'total_cost' => (float) ($item->quantity * $item->buy_price),
-                        'is_return' => (bool) $item->is_return,
+                        'buy_price' => (float)$item->buy_price,
+                        'sell_price' => $item->product ? (float)$item->product->sell_price : (float)$item->buy_price,
+                        'total_cost' => (float)($item->quantity * $item->buy_price),
+                        'is_return' => (bool)$item->is_return,
                     ];
                 }),
-                'total_amount' => (float) $purchase->total_amount,
+                'total_amount' => (float)$purchase->total_amount,
                 'status' => 'completed', // You can add logic to determine status
                 'notes' => $purchase->notes,
                 'created_at' => $purchase->created_at,
@@ -89,14 +92,18 @@ class PurchaseController extends Controller
             ];
         });
 
-        return response()->json($formattedPurchases);
+        return $this->sendJsonResponse(
+            Response::HTTP_OK,
+            [],
+            $formattedPurchases
+        );
     }
 
-    public function store(StorePurchaseRequest $request)
+    public function store(StorePurchaseRequest $request): JsonResponse
     {
         $data = $request->validated();
-
-        return DB::transaction(function () use ($data) {
+        DB::beginTransaction();
+        try {
             $dealerId = $data['dealer_id'] ?? null;
 
             // If no dealer_id but dealer_name exists, create new dealer
@@ -115,7 +122,7 @@ class PurchaseController extends Controller
                 'notes' => $data['notes'] ?? null,
             ]);
 
-            $used = FundsService::allocateFunds($data['total_amount'], 'purchase', $purchase->id);
+            $used = FundsService::allocateFunds($data['total_amount'], StockMovement::REFERENCE_TYPE_PURCHASE, $purchase->id);
 
             Log::info('Закуп оплачен', $used);
 
@@ -128,19 +135,14 @@ class PurchaseController extends Controller
                 if (!$productId && isset($itemData['product_name'])) {
                     $product = Product::query()->create([
                         'name' => $itemData['product_name'],
-                        'buy_price' => $itemData['buy_price'],
-                        'sell_price' => $itemData['sell_price'] ?? $itemData['buy_price'],
-                        'quantity' => $isReturn ? 0 : $itemData['quantity'],
+                        'sell_price' => $itemData['sell_price'],
                     ]);
                     $productId = $product->id;
                 } else if ($productId) {
                     // Update product quantity
                     $product = Product::query()->find($productId);
                     if ($product) {
-                        if($itemData['buy_price'] != $product->buy_price){
-                            $product->buy_price = $itemData['buy_price'];
-                        }
-                        if($itemData['sell_price'] != $product->sell_price){
+                        if ($itemData['sell_price'] != $product->sell_price) {
                             $product->sell_price = $itemData['sell_price'];
                         }
                         if ($isReturn) {
@@ -149,28 +151,56 @@ class PurchaseController extends Controller
                             $product->quantity += $itemData['quantity'];
                         }
                         $product->save();
+                        $productId = $product->id;
                     }
                 }
 
                 // Create purchase item
-                PurchaseItem::query()->create([
+                $purchaseItem = PurchaseItem::query()->create([
                     'purchase_id' => $purchase->id,
                     'product_id' => $productId,
                     'quantity' => $itemData['quantity'],
                     'buy_price' => $itemData['buy_price'],
                     'is_return' => $isReturn,
                 ]);
+
+                StockMovement::query()->create([
+                    'product_id' => $productId,
+                    'purchase_item_id' => $purchaseItem->id,
+                    'type' => $isReturn ? StockMovement::TYPE_OUT : StockMovement::TYPE_IN,
+                    'quantity' => $itemData['quantity'],
+                    'reference_type' => StockMovement::REFERENCE_TYPE_PURCHASE,
+                    'reference_id' => $purchase->id,
+                ]);
             }
 
-            return response()->json($purchase->load(['dealer', 'items.product']), 201);
-        });
+            DB::commit();
+            return $this->sendJsonResponse(
+                Response::HTTP_CREATED,
+                [],
+                $purchase->load(['dealer', 'items.product'])
+            );
+
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return $this->sendJsonResponse(
+                Response::HTTP_UNPROCESSABLE_ENTITY,
+                ['message' => $e->getMessage()]
+            );
+        }
     }
 
-    public function show(Purchase $purchase)
+    public function show(Purchase $purchase): JsonResponse
     {
-        return response()->json($purchase->load(['dealer', 'items.product']));
+        return $this->sendJsonResponse(
+            Response::HTTP_OK,
+            [],
+            $purchase->load(['dealer', 'items.product'])
+        );
     }
-    public function update(StorePurchaseRequest $request, Purchase $purchase)
+
+    public function update(StorePurchaseRequest $request, Purchase $purchase): JsonResponse
     {
         $data = $request->validated();
 
@@ -188,6 +218,15 @@ class PurchaseController extends Controller
                         $product->save();
                     }
                 }
+
+                StockMovement::query()->create([
+                    'product_id' => $oldItem->product_id,
+                    'purchase_item_id' => $oldItem->id,
+                    'type' => !$oldItem->is_return ? StockMovement::TYPE_OUT : StockMovement::TYPE_IN,
+                    'quantity' => $oldItem->quantity,
+                    'reference_type' => StockMovement::REFERENCE_TYPE_PURCHASE,
+                    'reference_id' => $purchase->id,
+                ]);
             }
 
             // Delete old items
@@ -219,20 +258,16 @@ class PurchaseController extends Controller
                 if (!$productId && isset($itemData['product_name'])) {
                     $product = Product::query()->create([
                         'name' => $itemData['product_name'],
-                        'buy_price' => $itemData['buy_price'],
-                        'sell_price' => $itemData['sell_price'] ?? $itemData['buy_price'],
+                        'sell_price' => $itemData['sell_price'],
                         'quantity' => $isReturn ? 0 : $itemData['quantity'],
                     ]);
                     $productId = $product->id;
                 } else if ($productId) {
                     // Update product quantity
                     $product = Product::query()->find($productId);
-                        if($itemData['buy_price']!=$product->buy_price){
-                            $product->buy_price = $itemData['buy_price'];
-                        }
-                        if($itemData['sell_price'] != $product->sell_price){
-                            $product->sell_price = $itemData['sell_price'];
-                        }
+                    if ($itemData['sell_price'] != $product->sell_price) {
+                        $product->sell_price = $itemData['sell_price'];
+                    }
                     if ($product) {
                         if ($isReturn) {
                             $product->quantity -= $itemData['quantity'];
@@ -244,18 +279,32 @@ class PurchaseController extends Controller
                 }
 
                 // Create purchase item
-                PurchaseItem::query()->create([
+                $purchaseItem = PurchaseItem::query()->create([
                     'purchase_id' => $purchase->id,
                     'product_id' => $productId,
                     'quantity' => $itemData['quantity'],
                     'buy_price' => $itemData['buy_price'],
                     'is_return' => $isReturn,
                 ]);
+
+                StockMovement::query()->create([
+                    'product_id' => $productId,
+                    'purchase_item_id' => $purchaseItem->id,
+                    'type' => $isReturn ? StockMovement::TYPE_OUT : StockMovement::TYPE_IN,
+                    'quantity' => $itemData['quantity'],
+                    'reference_type' => StockMovement::REFERENCE_TYPE_PURCHASE,
+                    'reference_id' => $purchase->id,
+                ]);
             }
 
-            return response()->json($purchase->load(['dealer', 'items.product']));
+            return $this->sendJsonResponse(
+                Response::HTTP_OK,
+                [],
+                $purchase->load(['dealer', 'items.product'])
+            );
         });
     }
+
     public function destroy(Purchase $purchase)
     {
         return DB::transaction(function () use ($purchase) {
@@ -271,11 +320,21 @@ class PurchaseController extends Controller
                         }
                         $product->save();
                     }
+
+                    StockMovement::query()->create([
+                        'product_id' => $item->product_id,
+                        'purchase_item_id' => $item->id,
+                        'type' => !$item->is_return ? StockMovement::TYPE_OUT : StockMovement::TYPE_IN,
+                        'quantity' => $item->quantity,
+                        'reference_type' => StockMovement::REFERENCE_TYPE_PURCHASE,
+                        'reference_id' => $purchase->id,
+                    ]);
                 }
             }
 
             $purchase->delete();
-            return response()->json(null, 204);
+
+            return $this->sendJsonResponse(Response::HTTP_NO_CONTENT);
         });
     }
 }

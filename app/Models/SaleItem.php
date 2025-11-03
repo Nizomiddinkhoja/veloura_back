@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class SaleItem extends Model
 {
@@ -12,26 +13,23 @@ class SaleItem extends Model
     protected $fillable = [
         'sale_id',
         'product_id',
-        'name',
         'quantity',
         'sell_price',
         'buy_price',
-        'profit',
     ];
 
     protected $casts = [
         'sell_price' => 'float',
         'buy_price' => 'float',
-        'profit' => 'float',
     ];
 
-    public function sale()
+    public function sale(): BelongsTo
     {
         return $this->belongsTo(Sale::class);
     }
 
-    public function product()
+    public function product(): BelongsTo
     {
-        return $this->belongsTo(Product::class);
+        return $this->belongsTo(Product::class, 'product_id');
     }
 }

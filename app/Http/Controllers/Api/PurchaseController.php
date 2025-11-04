@@ -135,13 +135,18 @@ class PurchaseController extends Controller
                 if (!$productId && isset($itemData['product_name'])) {
                     $product = Product::query()->create([
                         'name' => $itemData['product_name'],
+                        'buy_price' => $itemData['buy_price'],
                         'sell_price' => $itemData['sell_price'],
+                        'quantity' => $isReturn ? 0 : $itemData['quantity'],
                     ]);
                     $productId = $product->id;
                 } else if ($productId) {
                     // Update product quantity
                     $product = Product::query()->find($productId);
                     if ($product) {
+                        if ($itemData['buy_price'] > $product->buy_price) {
+                            $product->buy_price = $itemData['buy_price'];
+                        }
                         if ($itemData['sell_price'] != $product->sell_price) {
                             $product->sell_price = $itemData['sell_price'];
                         }
@@ -160,6 +165,7 @@ class PurchaseController extends Controller
                     'purchase_id' => $purchase->id,
                     'product_id' => $productId,
                     'quantity' => $itemData['quantity'],
+                    'remaining_quantity' => $itemData['quantity'],
                     'buy_price' => $itemData['buy_price'],
                     'is_return' => $isReturn,
                 ]);
@@ -258,6 +264,7 @@ class PurchaseController extends Controller
                 if (!$productId && isset($itemData['product_name'])) {
                     $product = Product::query()->create([
                         'name' => $itemData['product_name'],
+                        'buy_price' => $itemData['buy_price'],
                         'sell_price' => $itemData['sell_price'],
                         'quantity' => $isReturn ? 0 : $itemData['quantity'],
                     ]);
@@ -265,6 +272,9 @@ class PurchaseController extends Controller
                 } else if ($productId) {
                     // Update product quantity
                     $product = Product::query()->find($productId);
+                    if ($itemData['buy_price'] > $product->buy_price) {
+                        $product->buy_price = $itemData['buy_price'];
+                    }
                     if ($itemData['sell_price'] != $product->sell_price) {
                         $product->sell_price = $itemData['sell_price'];
                     }

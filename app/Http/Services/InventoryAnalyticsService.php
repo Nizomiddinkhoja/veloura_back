@@ -16,8 +16,6 @@ class InventoryAnalyticsService
     {
 //        $startDate = Carbon::parse($startDate ?? '1970-01-01')->timezone('Asia/Dushanbe')->format('Y-m-d');
 //        $endDate = Carbon::parse($endDate ?? now())->timezone('Asia/Dushanbe')->format('Y-m-d h:i:s');
-
-
         $tz = 'Asia/Dushanbe';
 
         $startDate = Carbon::parse($startDate ?? '1970-01-01', $tz)
@@ -36,8 +34,6 @@ class InventoryAnalyticsService
             ->whereBetween('created_at', [$startDate, $endDate])
             ->get()
             ->flatMap->items;
-
-        Log::info('$purchaseItems', [$startDate, $endDate]);
 
         $purchases_total = $purchaseItems->where('is_return', 0)->sum(fn($i) => $i->buy_price * $i->quantity);
         $returned_to_dealer = $purchaseItems->where('is_return', 1)->sum(fn($i) => $i->buy_price * $i->quantity);

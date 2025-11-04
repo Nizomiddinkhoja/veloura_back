@@ -14,12 +14,15 @@ class Product extends Model
         'name',
         'sell_price',
         'is_deleted',
+        'quantity',
+        'buy_price',
     ];
 
     protected $casts = [
         'buy_price' => 'float',
         'sell_price' => 'float',
         'is_deleted' => 'boolean',
+        'quantity' => 'float',
     ];
 
     protected $hidden = ['is_deleted'];

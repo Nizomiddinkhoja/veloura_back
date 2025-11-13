@@ -24,7 +24,7 @@ class SaleController extends Controller
     {
         $query = Sale::query()
             ->where('is_deleted', 0)
-            ->with(['returns'])
+            ->with(['returns.product'])
             ->with(['items.product']);
 
         // Search filter (customer name, comment)
@@ -114,6 +114,7 @@ class SaleController extends Controller
                 // ✅ Проверяем наличие по FIFO
                 $available = PurchaseItem::query()
                     ->where('product_id', $product->id)
+                    ->where('is_return', 0)
                     ->sum('remaining_quantity');
 
                 if ($quantity > $available) {
@@ -126,6 +127,7 @@ class SaleController extends Controller
                 // 💸 Списываем через FIFO
                 $batches = PurchaseItem::query()
                     ->where('product_id', $product->id)
+                    ->where('is_return', 0)
                     ->where('remaining_quantity', '>', 0)
                     ->orderBy('id')
                     ->lockForUpdate()
@@ -174,6 +176,7 @@ class SaleController extends Controller
                 // Обновим общий остаток товара (опционально)
                 $product->quantity = PurchaseItem::query()
                     ->where('product_id', $product->id)
+                    ->where('is_return', 0)
                     ->sum('remaining_quantity');
                 $product->save();
             }
@@ -272,16 +275,10 @@ class SaleController extends Controller
                     ->with('product')
                     ->firstOrFail();
 
-                // Проверяем лимит возврата
-                $alreadyReturned = SaleReturn::query()->where('sale_id', $sale->id)
-                    ->where('product_id', $productId)
-                    ->sum('quantity');
-
-                $availableToReturn = $saleItem->quantity - $alreadyReturned;
-                if ($returnQuantity > $availableToReturn) {
+                if ($returnQuantity > $saleItem->quantity) {
                     return $this->sendJsonResponse(
                         Response::HTTP_UNPROCESSABLE_ENTITY,
-                        ['message' => "Нельзя вернуть {$returnQuantity} шт. ({$saleItem->product->name}), доступно {$availableToReturn}"]
+                        ['message' => "Нельзя вернуть {$returnQuantity} шт. ({$saleItem->product->name}), доступно {$saleItem->quantity}"]
                     );
                 }
 
@@ -291,23 +288,29 @@ class SaleController extends Controller
                 $refundProfit = ($saleItem->sell_price - $saleItem->buy_price) * $returnQuantity;
                 $totalRefund += $refundAmount;
 
+                $purchaseItem = PurchaseItem::query()
+                    ->where([
+                        'product_id' => $productId,
+                        'buy_price' => $saleItem->buy_price,
+                        'is_return' => 0
+                    ])
+                    ->orderBy('id', 'desc')
+                    ->first();
+
                 // 📦 Добавляем возврат в FIFO-запасы (как новый приход)
                 StockMovement::query()->create([
                     'product_id' => $productId,
-                    'purchase_item_id' => null,
+                    'purchase_item_id' => $purchaseItem->id,
                     'type' => StockMovement::TYPE_IN,
                     'quantity' => $returnQuantity,
                     'reference_type' => StockMovement::REFERENCE_TYPE_SALE_RETURNS,
                     'reference_id' => $sale->id,
                 ]);
 
-                // Добавляем новую партию на склад с той же себестоимостью
-                PurchaseItem::query()->create([
-                    'product_id' => $productId,
-                    'buy_price' => $saleItem->buy_price,
-                    'quantity' => $returnQuantity,
-                    'remaining_quantity' => $returnQuantity,
-                ]);
+                // Добавляем количество на склад
+                $purchaseItem->quantity = $purchaseItem->quantity + $returnQuantity;
+                $purchaseItem->remaining_quantity = $purchaseItem->remaining_quantity + $returnQuantity;
+                $purchaseItem->save();
 
                 // 💰 Обновляем фонды
                 FundsService::updateBalance(Fund::TYPE_COGS, -$refundCOGS, StockMovement::REFERENCE_TYPE_SALE_RETURNS, $sale->id, 'Возврат себестоимости');
@@ -324,10 +327,13 @@ class SaleController extends Controller
                     'comment' => $comment,
                 ]);
 
+                $saleItem->delete();
+
                 // Обновляем остатки товара
                 $product = Product::query()->lockForUpdate()->find($productId);
                 $product->quantity = PurchaseItem::query()
                     ->where('product_id', $productId)
+                    ->where('is_return', 0)
                     ->sum('remaining_quantity');
                 $product->save();
             }

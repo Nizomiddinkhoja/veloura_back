@@ -30,12 +30,12 @@ class InventoryAnalyticsService
 
         // 📦 Закупки и 🔄 Возвраты дилеру
         $purchaseItems = Purchase::with('items')
-//            ->where('created_at', '>=', $endDate)
             ->whereBetween('created_at', [$startDate, $endDate])
             ->get()
             ->flatMap->items;
 
         $purchases_total = $purchaseItems->where('is_return', 0)->sum(fn($i) => $i->buy_price * $i->quantity);
+        $current_stock_cost = $purchaseItems->where('is_return', 0)->sum(fn($i) => $i->buy_price * $i->remaining_quantity);
         $returned_to_dealer = $purchaseItems->where('is_return', 1)->sum(fn($i) => $i->buy_price * $i->quantity);
 
         // 💵 Продажи и возвраты
@@ -83,7 +83,6 @@ class InventoryAnalyticsService
 
         // 🧮 Итоги
         $real_purchases = $purchases_total - $returned_to_dealer;
-        $current_stock_cost = $real_purchases - $sold_cost + $refund_total;
 
         return (object)[
             'purchases_total'       => (float)$purchases_total,

@@ -150,11 +150,6 @@ class PurchaseController extends Controller
                         if ($itemData['sell_price'] != $product->sell_price) {
                             $product->sell_price = $itemData['sell_price'];
                         }
-                        if ($isReturn) {
-                            $product->quantity -= $itemData['quantity'];
-                        } else {
-                            $product->quantity += $itemData['quantity'];
-                        }
                         $product->save();
                         $productId = $product->id;
                     }
@@ -178,6 +173,13 @@ class PurchaseController extends Controller
                     'reference_type' => StockMovement::REFERENCE_TYPE_PURCHASE,
                     'reference_id' => $purchase->id,
                 ]);
+
+                $product = Product::query()->lockForUpdate()->find($productId);
+                $product->quantity = PurchaseItem::query()
+                    ->where('product_id', $productId)
+                    ->where('is_return', 0)
+                    ->sum('remaining_quantity');
+                $product->save();
             }
 
             DB::commit();
@@ -208,6 +210,8 @@ class PurchaseController extends Controller
 
     public function update(StorePurchaseRequest $request, Purchase $purchase): JsonResponse
     {
+        return $this->sendJsonResponse(Response::HTTP_NO_CONTENT);
+
         $data = $request->validated();
 
         return DB::transaction(function () use ($data, $purchase) {

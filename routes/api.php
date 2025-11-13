@@ -10,9 +10,8 @@ use App\Http\Controllers\Api\DealerController;
 use App\Http\Controllers\Api\PurchaseController;
 use Illuminate\Http\Middleware\HandleCors;
 
-Route::get('/test', function (){
-    $result = 123;
-    dd($result);
+Route::get('/test', function () {
+
 });
 
 Route::prefix('v1')->middleware([HandleCors::class])->group(function () {

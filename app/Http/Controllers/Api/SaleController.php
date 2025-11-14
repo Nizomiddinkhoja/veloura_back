@@ -160,9 +160,11 @@ class SaleController extends Controller
                 $profit = $lineTotal - $totalCOGS;
                 $total += $lineTotal;
 
-                // 💰 Обновляем фонды
-                FundsService::updateBalance(Fund::TYPE_COGS, $totalCOGS, StockMovement::REFERENCE_TYPE_SALE, $sale->id, 'Начисление себестоимости');
-                FundsService::updateBalance(Fund::TYPE_PROFIT, $profit, StockMovement::REFERENCE_TYPE_SALE, $sale->id, 'Начисление прибыли');
+                if ($request->input('paid')) {
+                    // 💰 Обновляем фонды
+                    FundsService::updateBalance(Fund::TYPE_COGS, $totalCOGS, StockMovement::REFERENCE_TYPE_SALE, $sale->id, 'Начисление себестоимости');
+                    FundsService::updateBalance(Fund::TYPE_PROFIT, $profit, StockMovement::REFERENCE_TYPE_SALE, $sale->id, 'Начисление прибыли');
+                }
 
                 // 💾 Создаём элемент продажи
                 SaleItem::query()->create([
@@ -170,7 +172,7 @@ class SaleController extends Controller
                     'product_id' => $product->id,
                     'quantity' => $quantity,
                     'sell_price' => $sellPrice,
-                    'buy_price' => $totalCOGS / $quantity, // средняя цена по партиям
+                    'buy_price' => $totalCOGS,
                 ]);
 
                 // Обновим общий остаток товара (опционально)
@@ -225,6 +227,25 @@ class SaleController extends Controller
             ->find($id);
         $sale->paid = 1;
         $sale->save();
+
+        // Выберем элементы продаж
+        $saleItems = SaleItem::query()->where([
+            'sale_id' => $sale->id,
+        ])->get();
+
+        foreach ($saleItems as $saleItem) {
+            $totalCOGS = $saleItem->buy_price;
+            $sellPrice = $saleItem->sell_price;
+            $quantity = $saleItem->quantity;
+
+            $lineTotal = $sellPrice * $quantity;
+            $profit = $lineTotal - $totalCOGS;
+
+            // 💰 Обновляем фонды
+            FundsService::updateBalance(Fund::TYPE_COGS, $totalCOGS, StockMovement::REFERENCE_TYPE_SALE, $sale->id, 'Начисление себестоимости для продажи №' . $sale->id);
+            FundsService::updateBalance(Fund::TYPE_PROFIT, $profit, StockMovement::REFERENCE_TYPE_SALE, $sale->id, 'Начисление прибыли для продажи №' . $sale->id);
+        }
+
         return $this->sendJsonResponse(Response::HTTP_NO_CONTENT);
     }
 

@@ -7,6 +7,7 @@ use App\Http\Requests\StoreProductRequest;
 use App\Models\Product;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Symfony\Component\HttpFoundation\Response;
 
 class ProductController extends Controller
@@ -51,6 +52,11 @@ class ProductController extends Controller
         if ($request->has('date_to')) {
             $query->whereDate('created_at', '<=', $request->input('date_to'));
         }
+        $query->with(['purchaseItems' => function ($query) {
+            $query->select('product_id', 'buy_price', DB::raw('SUM(remaining_quantity) as quantity'))
+                ->where('remaining_quantity', '>', 0)
+                ->groupBy('product_id', 'buy_price');
+        }]);
 
         $sortBy = $request->input('sort_by', 'id');
         $sortOrder = $request->input('sort_order', 'asc');

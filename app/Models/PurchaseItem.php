@@ -20,6 +20,8 @@ class PurchaseItem extends Model
 
     protected $casts = [
         'buy_price' => 'float',
+        'quantity' => 'float',
+        'remaining_quantity' => 'float',
         'is_return' => 'boolean',
     ];
 

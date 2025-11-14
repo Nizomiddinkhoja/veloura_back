@@ -22,15 +22,15 @@ Route::prefix('v1')->middleware([HandleCors::class])->group(function () {
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/me', [AuthController::class, 'me']);
         Route::post('/logout', [AuthController::class, 'logout']);
-    });
 
-    Route::apiResource('products', ProductController::class);
-    Route::apiResource('notes', NoteController::class);
-    Route::apiResource('dealers', DealerController::class);
-    Route::apiResource('purchases', PurchaseController::class);
-    Route::apiResource('sales', SaleController::class)->only(['index', 'store', 'show', 'destroy']);
-    Route::post('sales/paid/{id}', [SaleController::class, 'paid']);
-    Route::patch('sales/comment/{id}', [SaleController::class, 'updateComment']);
-    Route::post('sales/return/{id}', [SaleController::class, 'returnItems']);
-    Route::get('analytics', [SaleController::class, 'analytics']);
+        Route::apiResource('products', ProductController::class);
+        Route::apiResource('notes', NoteController::class);
+        Route::apiResource('dealers', DealerController::class);
+        Route::apiResource('purchases', PurchaseController::class);
+        Route::apiResource('sales', SaleController::class)->only(['index', 'store', 'show', 'destroy']);
+        Route::post('sales/paid/{id}', [SaleController::class, 'paid']);
+        Route::patch('sales/comment/{id}', [SaleController::class, 'updateComment']);
+        Route::post('sales/return/{id}', [SaleController::class, 'returnItems']);
+        Route::get('analytics', [SaleController::class, 'analytics']);
+    });
 });

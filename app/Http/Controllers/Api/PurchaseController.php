@@ -160,10 +160,29 @@ class PurchaseController extends Controller
                     'purchase_id' => $purchase->id,
                     'product_id' => $productId,
                     'quantity' => $itemData['quantity'],
-                    'remaining_quantity' => $itemData['quantity'],
+                    'remaining_quantity' => $isReturn ? 0 : $itemData['quantity'],
                     'buy_price' => $itemData['buy_price'],
                     'is_return' => $isReturn,
                 ]);
+
+                if ($isReturn) {
+                    $purchaseItems = PurchaseItem::query()->where([
+                        'product_id' => $productId,
+                        'is_return' => 0,
+                    ])->get();
+                    $qty = $itemData['quantity'];
+
+                    foreach ($purchaseItems as $purchaseItem) {
+                        if ($qty <= 0) break;
+
+                        $take = min($purchaseItem->remaining_quantity, $qty);
+
+                        $purchaseItem->remaining_quantity -= $take;
+                        $purchaseItem->save();
+
+                        $qty -= $take;
+                    }
+                }
 
                 StockMovement::query()->create([
                     'product_id' => $productId,
